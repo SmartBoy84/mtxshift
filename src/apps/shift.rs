@@ -194,7 +194,7 @@ pub async fn shift<D: 'static>(
     let heartbeat_display = display.clone();
     let heartbeat_indicator = indicator.clone();
 
-    let _x = ex.spawn(async move {
+    ex.spawn(async move {
         loop {
             Timer::after(HEARTBEAT).await;
             let mut indicator = heartbeat_indicator.lock().await;
@@ -202,7 +202,8 @@ pub async fn shift<D: 'static>(
             *indicator ^= 1;
             display.write_raw_byte(0, 1, *indicator).unwrap();
         }
-    });
+    })
+    .detach();
 
     let offset_indicator = indicator.clone();
 
@@ -210,26 +211,30 @@ pub async fn shift<D: 'static>(
     let day_offset_clone = day_offset.clone();
     let (off_tx, off_rx) = channel::bounded::<()>(1);
 
-    let button_monitor = ex.spawn(async move {
+    ex.spawn(async move {
         loop {
             let Ok(_) = button.recv().await else {
                 continue;
             };
-            let mut day_offset = day_offset_clone.lock().await;
-            let mut indicator = offset_indicator.lock().await;
-            if *day_offset == 7 {
-                *indicator &= !0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset = 0;
+
+            // all the locking seems a bit redundant but it is to prevent race conditions (day_indicator and offset locks can't be held concurrently -> due to both being required in the main app refresh loop)
+            if *day_offset_clone.lock().await == 7 {
+                *offset_indicator.lock().await &= !0x08; // set random ass middle led on to indicate that not on present day
+                *day_offset_clone.lock().await = 0;
             } else {
-                *indicator |= 0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset += 1;
+                *offset_indicator.lock().await |= 0x08; // set random ass middle led on to indicate that not on present day
+                *day_offset_clone.lock().await += 1;
             }
+
             match off_tx.try_send(()) {
-                Err(TrySendError::Full(_)) => continue,
+                Err(TrySendError::Full(_)) => {
+                    continue;
+                }
                 r => r.unwrap(),
             }
         }
-    });
+    })
+    .detach();
 
     let c = WorkjamUser::new(TOKEN);
     let AuthRes { employers, user_id } = c.get_auth().unwrap();
@@ -292,8 +297,9 @@ pub async fn shift<D: 'static>(
                 println!("page refresh")
             })
             .await;
-            *day_offset.lock().await = 0;
+
             *indicator.lock().await &= !0x08; // flip off bit
+            *day_offset.lock().await = 0;
         })
         .await;
     }

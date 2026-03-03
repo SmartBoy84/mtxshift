@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.100"
 async-compat = "0.2.5"
 chrono = "0.4.42"
+futures = "0.3.32"
 gpio-cdev = { version = "0.6.0", features = ["async-tokio"] }
 rand = "0.10.0"
 rouille = "3.6.2"

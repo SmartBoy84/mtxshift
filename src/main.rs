@@ -7,16 +7,17 @@ use std::{
 };
 
 use crate::{
-    apps::{MatrixApp, timer::blinky, shift::shift},
+    apps::{MatrixApp, shift::shift, timer::blinky},
     hardware::{
         ButtonMonitor, ButtonMonitorFunctionality, Matrix, MatrixFunctionality, SharedDisplay,
     },
 };
 
+use futures::{FutureExt, select};
 use rouille::Response;
 use smol::{
-    Executor,
-    future::{self, FutureExt, block_on},
+    Executor, channel,
+    future::{self, FutureExt as SmolFutureExt, block_on},
 };
 
 const DIN: usize = 2;
@@ -36,6 +37,8 @@ fn main() {
 
     let server_display = display.clone();
 
+    let (state_tx, state_rx) = channel::unbounded::<bool>();
+
     let _server = thread::spawn(|| {
         let state = Arc::new(Mutex::new(true));
         rouille::start_server("192.168.0.123:3141", move |h| {
@@ -44,11 +47,13 @@ fn main() {
             match (&h.url()[1..], *state) {
                 ("on" | "toggle", false) => {
                     *state = true;
-                    display.set_power(true).unwrap();
+                    state_tx.send_blocking(true).unwrap();
+                    // display.set_power(true).unwrap();
                 }
                 ("off" | "toggle", true) => {
                     *state = false;
-                    display.set_power(false).unwrap();
+                    state_tx.send_blocking(false).unwrap();
+                    // display.set_power(false).unwrap();
                 }
                 (i, _) => {
                     if let Ok(i) = i.parse::<u8>() {
@@ -63,11 +68,7 @@ fn main() {
     });
 
     // for tasks I want to continue in the background
-    let background_runner = Arc::new(Executor::new());
-    let new_back = background_runner.clone();
-    thread::spawn(move || {
-        smol::block_on(new_back.run(future::pending::<()>()));
-    });
+    let app_runner = Executor::new();
 
     // buttons
     let left_button = ButtonMonitor::new(LEFT_BUTTON);
@@ -75,41 +76,71 @@ fn main() {
     let right_button = ButtonMonitor::new(RIGHT_BUTTON);
     let right_button_events = right_button.get_recv();
 
-    background_runner
+    app_runner
         .spawn(async move {
             left_button.monitor().await;
         })
         .detach();
-    
-    background_runner
+
+    app_runner
         .spawn(async move {
             right_button.monitor().await;
         })
         .detach();
 
     // apps
-    let woolies = MatrixApp::new(shift, &display, &right_button_events);
-    let pomodoro = MatrixApp::new(blinky, &display, &right_button_events);
+    let woolies = MatrixApp::new(shift, &display);
+    let pomodoro = MatrixApp::new(blinky, &display);
 
-    for app in [woolies, pomodoro].iter().cycle() {
-        // clear it for next loop
-        for _ in 0..left_button_events.len() {
-            let _ = left_button_events.recv_blocking();
-        }
-        for _ in 0..right_button_events.len() {
-            let _ = right_button_events.recv_blocking();
-        }
-        block_on(app.resume().or(async {
-            loop {
-                match left_button_events.recv().await {
-                    Err(e) => {
-                        println!("{e:?}");
+    // main app loop
+    app_runner
+        .spawn(async move {
+            for app in [pomodoro, woolies].iter().cycle() {
+                // clear it for next loop
+                while left_button_events.try_recv().is_ok() {}
+                while right_button_events.try_recv().is_ok() {}
+
+                app.resume(&right_button_events)
+                    .or(async {
+                        loop {
+                            match left_button_events.clone().recv().await {
+                                Err(e) => {
+                                    println!("{e:?}");
+                                    continue;
+                                }
+                                _ => break,
+                            }
+                        }
+                        println!("next app!")
+                    })
+                    .await;
+            }
+        })
+        .detach();
+
+    // block local executor on running app executor, and waiting for button press
+    block_on(async {
+        loop {
+            select! {
+                () = app_runner.run(future::pending::<()>()).fuse() => todo!(),
+                r = state_rx.recv().fuse() => match r {
+                    Ok(false) => (),
+                    e => {
+                        e.unwrap();
                         continue;
                     }
-                    _ => break,
+                }
+            };
+            println!("pausing app");
+            loop {
+                match state_rx.recv().await {
+                    Ok(true) => break,
+                    e => {
+                        e.unwrap();
+                    }
                 }
             }
-            println!("next app!")
-        }));
-    }
+            println!("resuming app")
+        }
+    })
 }

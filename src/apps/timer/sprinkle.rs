@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 use crate::apps::timer::TimerType;
 
@@ -8,7 +8,6 @@ pub const SPRINKLE_FRAMES: TimerType = TimerType {
     frames: LazyLock::new(|| gen_sprinkle_frames()),
     preview: 30,
 };
-
 
 pub fn gen_sprinkle_frames() -> Vec<[[bool; 8]; 8]> {
     let mut frames = vec![];
