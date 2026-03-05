@@ -7,6 +7,7 @@ The setup is pretty basic:
 PI is connected to a 8x8 matrix and two buttons. One of the two buttons switches between the different apps, and the other button provides interactibility within apps.  
 
 # Apps
+> Note; double press the app switch button to switch apps - this is a hack to fix phantom presses switching apps randomly
 ## Shift indicator
 I use my [Workjam-rs library](https://github.com/SmartBoy84/workjam-rs) to get data for upcoming shifts and display it onto the matrix, periodically updating every five minutes.
 Information shown is:
