@@ -4,20 +4,26 @@ pub mod hardware;
 use std::{
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 
 use crate::{
     apps::{MatrixApp, shift::shift, timer::blinky},
     hardware::{
-        ButtonMonitor, ButtonMonitorFunctionality, Matrix, MatrixFunctionality, SharedDisplay,
+        ButtonMonitor, ButtonMonitorFunctionality, DEBOUNCE_DUR, Matrix, MatrixFunctionality,
+        SharedDisplay,
     },
 };
 
-use futures::{FutureExt, select};
+use futures::{
+    FutureExt,
+    future::{self, Either},
+    select,
+};
 use rouille::Response;
 use smol::{
-    Executor, channel,
-    future::{self, FutureExt as SmolFutureExt, block_on},
+    Executor, Timer, channel,
+    future::{FutureExt as SmolFutureExt, block_on},
 };
 
 const DIN: usize = 2;
@@ -95,21 +101,48 @@ fn main() {
     // main app loop
     app_runner
         .spawn(async move {
-            for app in [pomodoro, woolies].iter().cycle() {
+            for app in [woolies, pomodoro].iter().cycle() {
                 // clear it for next loop
                 while left_button_events.try_recv().is_ok() {}
                 while right_button_events.try_recv().is_ok() {}
 
                 app.resume(&right_button_events)
                     .or(async {
-                        loop {
-                            match left_button_events.clone().recv().await {
-                                Err(e) => {
-                                    println!("{e:?}");
-                                    continue;
-                                }
-                                _ => break,
-                            }
+                        let left_button_events = left_button_events.clone();
+                            const QUICK_PRESS_WAIT: Duration = Duration::from_secs(2); // max 1 second delay
+                            assert!(QUICK_PRESS_WAIT > 5 * DEBOUNCE_DUR); // just to be safe
+                            // have to press twice - hack to fix phantom presses
+                            let mut i = 2;
+                            loop {
+                                select! {
+                                    o = left_button_events.recv().fuse() => {
+                                        match o {
+                                            Err(e) => {
+                                                println!("{e:?}");
+                                                continue;
+                                            }
+                                            _ => {
+                                            i -= 1;
+                                            if i == 0 {
+                                                break
+                                            } else {
+                                                continue
+                                            }
+                                            }
+                                        }
+                                    }
+                                    _ = if i == 1 {
+                                        Either::Right(async {Timer::after(QUICK_PRESS_WAIT).await;}).fuse()
+                                    } else {
+                                          // don't do any timeout shit, if button hasn't been pressed once
+                                          Either::Left(future::pending::<()>()).fuse()
+                                            
+                                    } => {
+                                        i = 2; // maaan the nesting is so fuckiing deep it ain't auto formatting anymore...
+                                        continue
+                                    }
+
+                                };
                         }
                         println!("next app!")
                     })

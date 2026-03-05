@@ -34,7 +34,7 @@ where
     }
 }
 
-const DEBOUNCE_DUR: Duration = Duration::from_millis(250); // max millis in between press to count as legitimate press
+pub const DEBOUNCE_DUR: Duration = Duration::from_millis(250); // max millis in between press to count as legitimate press
 
 pub struct ButtonMonitor {
     tx: Sender<()>,
