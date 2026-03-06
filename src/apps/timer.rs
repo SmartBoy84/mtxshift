@@ -141,8 +141,6 @@ pub async fn app<D>(
         + Duration::from_mins(minute.trunc() as u64)
         + Duration::from_hours(hour);
 
-    let duration = Duration::from_secs(30);
-
     println!("{duration:?}");
 
     // final step - start timer!
