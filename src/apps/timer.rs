@@ -153,10 +153,12 @@ pub async fn app<D>(
     when the timer ends, this task is dropped so button no longer mapped
      */
     let button_to_global_task = ex.spawn(async move {
-        button.recv().await.unwrap();
-        match global_pause.try_send(Intensity::Pause(true)) {
-            Err(TrySendError::Full(_)) => (),
-            r => r.unwrap(),
+        loop {
+            button.recv().await.unwrap();
+            match global_pause.try_send(Intensity::Pause(true)) {
+                Err(TrySendError::Full(_)) => (),
+                r => r.unwrap(),
+            }
         }
     });
 
