@@ -3,13 +3,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use smol::{Executor, Timer, channel::Receiver, future::FutureExt};
+use futures::TryFutureExt;
+use smol::{
+    Executor, Timer,
+    channel::{Receiver, Sender, TrySendError},
+    future::FutureExt as SmolFutureExt,
+};
 
 use crate::{
-    apps::timer::{
-        linear::LINEAR_FRAMES,
-        sand::{SAND_FRAMES_NON_UNIFORM, SAND_FRAMES_UNIFORM},
-        sprinkle::SPRINKLE_FRAMES,
+    Intensity,
+    apps::{
+        PauseType,
+        timer::{
+            linear::LINEAR_FRAMES,
+            sand::{SAND_FRAMES_NON_UNIFORM, SAND_FRAMES_UNIFORM},
+            sprinkle::SPRINKLE_FRAMES,
+        },
     },
     hardware::{Matrix, MatrixFunctionality, SharedDisplay},
 };
@@ -70,8 +79,14 @@ where
     .await
 }
 
-pub async fn app<D>(display: SharedDisplay<D>, button: Receiver<()>)
-where
+/// WARNING; I declare that this app handles global_pause -> I must always handle it as the main loop waits for tx
+pub async fn app<D>(
+    display: SharedDisplay<D>,
+    ex: Arc<Executor<'_>>,
+    button: Receiver<()>,
+    pause: Receiver<PauseType>,
+    global_pause: Sender<Intensity>,
+) where
     Matrix<D>: MatrixFunctionality,
 {
     let timers = TIMERS;
@@ -126,73 +141,127 @@ where
         + Duration::from_mins(minute.trunc() as u64)
         + Duration::from_hours(hour);
 
+    let duration = Duration::from_secs(30);
+
     println!("{duration:?}");
 
     // final step - start timer!
     let interval = duration / timer.frames.len() as u32;
     let mut elapsed = Duration::from_secs(0);
+
+    /*
+    When we are in the timer screen, the pause button triggers a global pause
+    -> this just unifies everything
+    when the timer ends, this task is dropped so button no longer mapped
+     */
+    let button_to_global_task = ex.spawn(async move {
+        button.recv().await.unwrap();
+        match global_pause.try_send(Intensity::Pause(true)) {
+            Err(TrySendError::Full(_)) => (),
+            r => r.unwrap(),
+        }
+    });
+
     for (i, frame) in timer.frames.iter().enumerate() {
         let segment_start = Instant::now();
 
         let target_time = interval * i as u32;
-        let pause = async {
-            Timer::after(target_time.saturating_sub(elapsed)).await;
+        let pause_event = async {
+            Timer::after(target_time.saturating_sub(elapsed)).await; // automatically account for drift + if timer wasn't able to complete due to pause
 
             display.lock().await.write_buff(0, frame).unwrap();
-            false
+            None
         }
         .or(async {
-            button.recv().await.unwrap();
-            true
+            let k = pause.recv().map_ok(|t| Some(t)).await.unwrap();
+            println!("got pause request!!");
+            k
         })
         .await;
-        elapsed += segment_start.elapsed();
-        if pause {
+        elapsed += segment_start.elapsed(); // to account for when Timer stopped early (since it uses Instant under the hood)
+
+        // this is safe - we pause at a time where we aren't measuring elapsed time -> no sporadic jumps
+        if let Some(t) = pause_event {
+            // pretty sick - I don't even need to destructure the internal Option - just need to keep it so that it isn't droppd
+            // now the outer user waits for this to complete and then PauseTracker (if it exists) is dropped!
             display.lock().await.set_power(false).unwrap();
             Timer::after(Duration::from_millis(150)).await;
             display.lock().await.set_power(true).unwrap();
 
-            button.recv().await.unwrap(); // wait for another button press to resume
+            drop(t);
 
-            display.lock().await.set_power(false).unwrap();
-            Timer::after(Duration::from_millis(150)).await;
-            display.lock().await.set_power(true).unwrap();
+            // wait for unpause to avoid timer going ahead
+            while !matches!(pause.recv().await.unwrap(), PauseType::Unpause) {}
+
+            println!("paused app!")
         }
     }
+    // button -> global pause task dropped here
+    drop(button_to_global_task)
 }
 
-pub async fn blinky<D: 'static>(
+pub async fn timer<D: 'static>(
     display: SharedDisplay<D>,
-    _ex: Arc<Executor<'_>>,
+    ex: Arc<Executor<'_>>,
     rx: Receiver<()>,
     button: Receiver<()>,
+    pause: Receiver<PauseType>,
+    global_pause: Sender<Intensity>,
 ) where
     Matrix<D>: MatrixFunctionality + Send,
 {
     let app_display = display.clone();
+
     loop {
         // app restarted, reset display (no background timer - spoils the purpose!)
         display.lock().await.clear_display(0).unwrap();
         display.lock().await.set_power(true).unwrap();
 
+        let outer_pause = pause.clone();
         async {
-            app(app_display.clone(), button.clone()).await;
+            let (pause_tx, pause_rx) = smol::channel::bounded::<PauseType>(1);
+            let pause = outer_pause.clone();
+            let pause_relay_task = ex.spawn(async move {
+                loop {
+                    let _ = pause_tx.send(pause.clone().recv().await.unwrap());
+                } // simple relay
+            });
+
+            app(
+                app_display.clone(),
+                ex.clone(),
+                button.clone(),
+                pause_rx,
+                global_pause.clone(),
+            )
+            .await;
+
+            drop(pause_relay_task); // to stop the relay listener
+            let pause = outer_pause.clone();
+            let _pause_chomper_task = ex.spawn(async move {
+                loop {
+                    let _ = pause.recv().await; // receive and drop
+                }
+            });
 
             // once it finishes normally, flash to indicate until screen changed (i.e., other future resolves)
             for i in 0..=7 {
                 display.lock().await.write_raw_byte(0, i, 0xFF).unwrap();
             }
 
-            for s in [false, true].iter().cycle() {
-                display.lock().await.set_power(*s).unwrap();
-                Timer::after(FLASH_PERIOD).await;
+            async {
+                for s in [false, true].iter().cycle() {
+                    display.lock().await.set_power(*s).unwrap();
+                    Timer::after(FLASH_PERIOD).await;
+                }
             }
+            .or(async {
+                button.recv().await.unwrap(); // safe to handle button here, as the other task using it is done
+            })
+            .await;
         }
         .or(async {
             rx.recv().await.unwrap();
-        })
-        .or(async {
-            button.recv().await.unwrap();
         })
         .await;
     }

@@ -7,7 +7,7 @@ pub mod rpi;
 use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use smol::{
-    channel::{self, Receiver, Sender, TrySendError},
+    channel::{self, Receiver, Sender},
     lock::{Mutex, futures::Lock},
 };
 

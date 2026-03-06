@@ -4,7 +4,7 @@ use chrono::{DateTime, Days, Local, NaiveTime, Timelike};
 
 use smol::{
     Executor, Timer,
-    channel::{self, Receiver, TrySendError},
+    channel::{self, Receiver, Sender, TrySendError},
     future::FutureExt,
     lock::Mutex,
 };
@@ -16,7 +16,9 @@ use workjam_rs::{
     requests::{AuthRes, events},
 };
 
-use crate::hardware::{Matrix, MatrixFunctionality, SharedDisplay};
+use crate::{
+    Intensity, hardware::{Matrix, MatrixFunctionality, SharedDisplay}
+};
 
 const HEARTBEAT: Duration = Duration::from_secs(1);
 
@@ -186,6 +188,7 @@ pub async fn shift<D: 'static>(
     ex: Arc<Executor<'_>>,
     rx: Receiver<()>,
     button: Receiver<()>,
+    _: Sender<Intensity>
 ) where
     Matrix<D>: MatrixFunctionality + Send,
 {
@@ -208,9 +211,10 @@ pub async fn shift<D: 'static>(
     let offset_indicator = indicator.clone();
 
     let day_offset = Arc::new(Mutex::new(0));
-    let day_offset_clone = day_offset.clone();
     let (off_tx, off_rx) = channel::bounded::<()>(1);
 
+    {
+    let day_offset = day_offset.clone();
     ex.spawn(async move {
         loop {
             let Ok(_) = button.recv().await else {
@@ -218,12 +222,12 @@ pub async fn shift<D: 'static>(
             };
 
             // all the locking seems a bit redundant but it is to prevent race conditions (day_indicator and offset locks can't be held concurrently -> due to both being required in the main app refresh loop)
-            if *day_offset_clone.lock().await == 7 {
+            if *day_offset.lock().await == 7 {
                 *offset_indicator.lock().await &= !0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset_clone.lock().await = 0;
+                *day_offset.lock().await = 0;
             } else {
                 *offset_indicator.lock().await |= 0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset_clone.lock().await += 1;
+                *day_offset.lock().await += 1;
             }
 
             match off_tx.try_send(()) {
@@ -235,6 +239,7 @@ pub async fn shift<D: 'static>(
         }
     })
     .detach();
+    }
 
     let c = WorkjamUser::new(TOKEN);
     let AuthRes { employers, user_id } = c.get_auth().unwrap();
