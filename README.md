@@ -6,6 +6,8 @@ This was my initial foray into async Rust - it's pretty cool! I used the smol ru
 The setup is pretty basic:  
 PI is connected to a 8x8 matrix and two buttons. One of the two buttons switches between the different apps, and the other button provides interactibility within apps.  
 
+Despite the surface level simplicity, I promoted this project to GitHub because (as is typical in Rust), the underlying piping ended up being annoying complex and verbose (read for yourself!) — like I'm talking 10-15 channels in use concurrently.
+
 # Apps
 > Note; double press the app switch button to switch apps - this is a hack to fix phantom presses switching apps randomly
 ## Shift indicator
