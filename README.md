@@ -19,3 +19,13 @@ User can press the app button to view the above information about the following 
 
 ## Pomodoro timer
 Inspired from my [past experiment](https://github.com/SmartBoy84/espmatrix) with embedded-rust, I implemented a pomodoro timer with a configurable time and display type using the button.  
+
+# Web interface
+I included a very simple web interface on port `3141` for scripting purposes. Send a basic/blank `http` request to any of these to trigger.   
+## Endpoints
+- `/display_off` — switches display off, and pauses the currently running app
+- `/display_on` — switches display on, and unpauses the currently running app
+- `/toggle` — toggle between pause/unpause states
+- `/pause` — pause currently running app
+- `/unpause` — unpause currently running app
+- `/{integer}` — set display brightness
