@@ -12,6 +12,8 @@ use crate::{
     hardware::{Matrix, MatrixFunctionality, SharedDisplay},
 };
 
+// apps
+pub mod counter;
 pub mod shift;
 pub mod timer;
 
@@ -97,15 +99,14 @@ impl<'a> MatrixApp<'a> {
 
         ex.spawn(match f {
             // this match ensures that pause_rx is dropped if function doesn't need it
-            MatrixAppType::WithPause(f) => {
-                f(
+            MatrixAppType::WithPause(f) => f(
                 d.clone(),
                 ex.clone(),
                 refresh_rx,
                 button_rx,
                 pause_rx,
                 g_p.clone(),
-            )},
+            ),
             MatrixAppType::NoPause(f) => {
                 pause_rx.close();
                 drop(pause_rx); // it would likely have been automatically done but just make it explicit
@@ -157,11 +158,13 @@ impl<'a> MatrixApp<'a> {
         self.pause_tx.force_send(PauseType::Unpause).unwrap();
     }
 
-    pub async fn resume(&self, b: &Receiver<()>) {
-        match self.refresh_tx.try_send(()) {
-            Err(TrySendError::Full(_) | TrySendError::Closed(_)) => (), // closed is not an error -> listener may not care to know when an app refresh has happened
-            e @ _ => e.unwrap(),
-        };
+    pub async fn resume(&self, b: &Receiver<()>, first_run: bool) {
+        if !first_run {
+            match self.refresh_tx.try_send(()) {
+                Err(TrySendError::Full(_) | TrySendError::Closed(_)) => (), // closed is not an error -> listener may not care to know when an app refresh has happened
+                e @ _ => e.unwrap(),
+            };
+        }
         self.ex
             .run(future::pending::<()>())
             .or(if self.button_tx.is_closed() {

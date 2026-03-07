@@ -223,7 +223,7 @@ pub async fn timer<D: 'static>(
             let pause = outer_pause.clone();
             let pause_relay_task = ex.spawn(async move {
                 loop {
-                    let _ = pause_tx.send(pause.clone().recv().await.unwrap()).await.unwrap();
+                    let _ = pause_tx.send(pause.clone().recv().await.unwrap()).await.unwrap(); // BUG FIX NOTE: was not awaiting the send! without await, the future is never polled by/'submitted to' the executor, it is just created
                 } // simple relay
             });
 

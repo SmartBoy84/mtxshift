@@ -25,7 +25,7 @@ const HEARTBEAT: Duration = Duration::from_secs(1);
 const SHIFT_CHECK_PERIOD: Duration = Duration::from_mins(5); // update every 5 min
 const CHECK_DAYS: u64 = 7 * 3; // 3 weeks - left 3 columns
 
-const TOKEN: &str = "eyJraWQiOiJXT1JLSkFNLUFQSS1HQVRFV0FZLUtFWS1JRCIsInR5cCI6IkpXVCIsImFsZyI6IlJTMjU2In0.eyJzdWIiOiIyMDAwMDQ2MDE5MzcwIiwiZmlyc3ROYW1lIjoiSGFtZGFuIiwibGFzdE5hbWUiOiJNYWhtb29kIiwiaXNXSkFkbWluIjpmYWxzZSwiZW50cm9weSI6NzYwNTIzMzk5NDc4NTUyNTI3NiwiaXNzIjoidW5rbm93biIsImRhdGFjZW50ZXJJZCI6ImdjcC1hdXMiLCJleHAiOjE3NzYwNTE0MTMsImlhdCI6MTc3MDg2NzM1MywiaXNYVG9rZW4iOnRydWV9.18NpP9QYLW829PPBTzOZXTMTwK9PpJEo9BuIsM2rdBxSghfWT_3grfhMC7xRr0jDsrnMkrqFV4xJzUHbBgnNPt2SRuvQMjt9O8II6xtGWqwCVbg7C8DggJrrXBt19PQevjpobb2pU6AJu-C8p72-3zFSE8detbki_E87btsWv_cq5c6CkTgOXy6k9E9NoMojc3lNiZ09jUC5i7Uzf_Gg7hcdU5bEiPyMQt9io0d0Mq6Sc5HRgTOmmMwhLlVd1b4zlJfpCYMlSC7-FbjXJsvMgvQZO-wTolwnpAN-40iZkRvT5Baw_qupYll_G39oDvsZ5vAqCy_Kh0ukg75OxIvYBA";
+const TOKEN: &str = env!("MY_TOKEN");
 
 fn next_n_days(n: u64, now: DateTime<Local>) -> EventsPara {
     let now = now.with_time(NaiveTime::MIN).unwrap();
@@ -188,7 +188,7 @@ pub async fn shift<D: 'static>(
     ex: Arc<Executor<'_>>,
     rx: Receiver<()>,
     button: Receiver<()>,
-    _: Sender<Intensity>
+    _: Sender<Intensity>,
 ) where
     Matrix<D>: MatrixFunctionality + Send,
 {

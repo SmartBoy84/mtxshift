@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    apps::{MatrixApp, MatrixAppType, shift::shift,timer::timer},
+    apps::{MatrixApp, MatrixAppType, counter::counter, shift::shift, timer::timer},
     hardware::{
         ButtonMonitor, ButtonMonitorFunctionality, DEBOUNCE_DUR, Matrix, MatrixFunctionality,
         SharedDisplay,
@@ -20,7 +20,7 @@ use futures::{
 };
 use rouille::Response;
 use smol::{
-    Executor, Timer, block_on, channel, future::{FutureExt as SmolFutureExt}
+    Executor, Timer, block_on, channel::{self, TrySendError}, future::FutureExt as SmolFutureExt
 };
 
 const DIN: usize = 2;
@@ -118,9 +118,10 @@ fn main() {
     // apps
     let woolies = MatrixApp::new(MatrixAppType::NoPause(Box::new(shift)), &display, state_tx.clone());
     let pomodoro = MatrixApp::new(MatrixAppType::WithPause(Box::new(timer)), &display, state_tx.clone());
+    let counter = MatrixApp::new(MatrixAppType::NoPause(Box::new(counter)), &display, state_tx.clone());
     // let test = MatrixApp::new(test::test, &display);
 
-    let app_list = Arc::new([woolies, pomodoro]); // to prevent dropping
+    let app_list = Arc::new([woolies, pomodoro, counter]); // to prevent dropping
     let current_app = Arc::new(smol::lock::Mutex::new(0usize));
 
     // can't share the button channel directly because i suspend the task -> the source may try to wake the dead task, instead of delivering message to my main block_on
@@ -135,16 +136,17 @@ fn main() {
     app_runner
         .spawn(async move {
 
-            let mut app_cycle = (0..app_list.len()).cycle(); 
+            // keep track of first_run to prevent uncessary firing of refresh signal
+            let mut app_cycle = (0..app_list.len()).map(|i| (i, true)).chain((0..app_list.len()).cycle().map(|i| (i, false))); 
             loop {
-                let i = app_cycle.next().unwrap();
+                let (i, first_run) = app_cycle.next().unwrap();
                 *current_app.lock().await = i;
 
                 // clear it for next loop
                 while left_button_events.try_recv().is_ok() {}
                 while right_button_events.try_recv().is_ok() {}
 
-                app_list[i].resume(&right_button_events)
+                app_list[i].resume(&right_button_events, first_run)
                     .or(async {
                         let left_button_events = left_button_events.clone();
                             const QUICK_PRESS_WAIT: Duration = Duration::from_secs(2); // max 1 second delay
@@ -160,6 +162,7 @@ fn main() {
                                                 continue;
                                             }
                                             _ => {
+
                                             i -= 1;
                                             if i == 0 {
                                                 break
@@ -207,7 +210,8 @@ fn main() {
                         match right_button_events.recv().map_ok(|_| interface_tx.try_send(())).await {
                             Ok(Ok(_)) => (), // rx and tx all good
                             e @ Err(_) => {let _ = e.unwrap();}
-                            Ok( e @ Err(_)) => {let _ = e.unwrap();}
+                            Ok(Err(TrySendError::Full(_))) => (),
+                            Ok( e @ Err(_)) => {e.unwrap();},
                             }
                         }
                     })

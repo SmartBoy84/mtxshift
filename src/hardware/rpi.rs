@@ -1,3 +1,5 @@
+#![allow(unused)] // since on mac compilation, it thinks nothing is used as this file isn't "included" in its final binary
+
 use std::{error::Error, fmt::Display};
 
 use crate::hardware::{
