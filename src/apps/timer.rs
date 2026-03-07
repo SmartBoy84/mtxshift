@@ -190,10 +190,10 @@ pub async fn app<D>(
 
             drop(t);
 
+            println!("paused timer!");
             // wait for unpause to avoid timer going ahead
             while !matches!(pause.recv().await.unwrap(), PauseType::Unpause) {}
-
-            println!("paused app!")
+            println!("unpaused timer");
         }
     }
     // button -> global pause task dropped here
@@ -223,7 +223,7 @@ pub async fn timer<D: 'static>(
             let pause = outer_pause.clone();
             let pause_relay_task = ex.spawn(async move {
                 loop {
-                    let _ = pause_tx.send(pause.clone().recv().await.unwrap());
+                    let _ = pause_tx.send(pause.clone().recv().await.unwrap()).await.unwrap();
                 } // simple relay
             });
 
