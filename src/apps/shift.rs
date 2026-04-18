@@ -1,11 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Days, Local, NaiveTime, Timelike};
 
+use futures::{FutureExt, select};
 use smol::{
     Executor, Timer,
     channel::{self, Receiver, Sender, TrySendError},
-    future::FutureExt,
+    future::FutureExt as SmolFutureExt,
     lock::Mutex,
 };
 use workjam_rs::{
@@ -17,15 +18,15 @@ use workjam_rs::{
 };
 
 use crate::{
-    Intensity, hardware::{Matrix, MatrixFunctionality, SharedDisplay}
+    Intensity,
+    hardware::{Matrix, MatrixFunctionality, SharedDisplay},
 };
 
 const HEARTBEAT: Duration = Duration::from_secs(1);
+const OFFSET_RESET_TIME: Duration = Duration::from_secs(20);
 
 const SHIFT_CHECK_PERIOD: Duration = Duration::from_mins(5); // update every 5 min
 const CHECK_DAYS: u64 = 7 * 3; // 3 weeks - left 3 columns
-
-const TOKEN: &str = env!("MY_TOKEN");
 
 fn next_n_days(n: u64, now: DateTime<Local>) -> EventsPara {
     let now = now.with_time(NaiveTime::MIN).unwrap();
@@ -214,34 +215,52 @@ pub async fn shift<D: 'static>(
     let (off_tx, off_rx) = channel::bounded::<()>(1);
 
     {
-    let day_offset = day_offset.clone();
-    ex.spawn(async move {
-        loop {
-            let Ok(_) = button.recv().await else {
-                continue;
-            };
+        let day_offset = day_offset.clone();
+        let offset_indicator = offset_indicator.clone();
+        let mut offset_reset_timer = None;
 
-            // all the locking seems a bit redundant but it is to prevent race conditions (day_indicator and offset locks can't be held concurrently -> due to both being required in the main app refresh loop)
-            if *day_offset.lock().await == 7 {
-                *offset_indicator.lock().await &= !0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset.lock().await = 0;
-            } else {
-                *offset_indicator.lock().await |= 0x08; // set random ass middle led on to indicate that not on present day
-                *day_offset.lock().await += 1;
-            }
+        let (timer_reset_tx, timer_reset_rx) = channel::bounded::<()>(1);
 
-            match off_tx.try_send(()) {
-                Err(TrySendError::Full(_)) => {
-                    continue;
+        let inner_ex = ex.clone();
+        ex.spawn(async move {
+            loop {
+                let timer_reset = select! {
+                    () = async {timer_reset_rx.recv().await.unwrap()}.fuse() => { true },
+                    () = async {button.recv().await.unwrap()}.fuse() => { false }
+                };
+
+                // all the locking seems a bit redundant but it is to prevent race conditions (day_indicator and offset locks can't be held concurrently -> due to both being required in the main app refresh loop)
+                if timer_reset || *day_offset.lock().await == 7 {
+                    *offset_indicator.lock().await &= !0x08; // set random ass middle led on to indicate that not on present day
+                    *day_offset.lock().await = 0;
+                } else {
+                    *offset_indicator.lock().await |= 0x08; // set random ass middle led on to indicate that not on present day
+                    *day_offset.lock().await += 1;
+                    if let Some(timer_task) = offset_reset_timer.take() {
+                        drop(timer_task);
+                    }
+
+                    {
+                        let timer_reset_tx = timer_reset_tx.clone();
+                        offset_reset_timer = Some(inner_ex.spawn(async move {
+                            Timer::after(OFFSET_RESET_TIME).await;
+                            timer_reset_tx.send(()).await.unwrap();
+                        }))
+                    }
                 }
-                r => r.unwrap(),
+
+                match off_tx.try_send(()) {
+                    Err(TrySendError::Full(_)) => {
+                        continue;
+                    }
+                    r => r.unwrap(),
+                }
             }
-        }
-    })
-    .detach();
+        })
+        .detach();
     }
 
-    let c = WorkjamUser::new(TOKEN);
+    let c = WorkjamUser::new(&env::var("MY_TOKEN").expect("specify token in env var `MY_TOKEN`"));
     let AuthRes { employers, user_id } = c.get_auth().unwrap();
     let my_config = WorkjamRequestConfig::new()
         .company_id(employers.into_iter().next().unwrap())
@@ -299,6 +318,11 @@ pub async fn shift<D: 'static>(
                 rx.recv().await.unwrap();
                 display.lock().await.clear_display(0).unwrap();
                 display.lock().await.set_power(true).unwrap();
+
+                // reset offset
+                *offset_indicator.lock().await &= !0x08; // set random ass middle led on to indicate that not on present day
+                *day_offset.lock().await = 0;
+
                 println!("page refresh")
             })
             .await;

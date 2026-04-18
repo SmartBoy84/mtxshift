@@ -30,6 +30,7 @@ pub async fn counter<D: 'static>(
 
 {
     let disp_cache = disp_cache.clone();
+
     ex.spawn(async move {
         let mut f = fs::OpenOptions::new().read(true).write(true).create(true).open(COUNT_PATH).await.unwrap();
         
